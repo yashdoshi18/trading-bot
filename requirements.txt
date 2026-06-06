@@ -1,0 +1,11 @@
+anthropic>=0.25.0
+yfinance>=0.2.40
+pandas>=2.0.0
+pandas-ta>=0.3.14b
+pyTelegramBotAPI>=4.18.0
+python-dotenv>=1.0.0
+schedule>=1.2.0
+feedparser>=6.0.11
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
