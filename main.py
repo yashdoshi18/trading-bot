@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """
-AI Trading Engine v3.1
-Tiered scanning: 200+ NSE stocks
-Tier 1 (top 80): every 2.5h
-Tier 2 (mid caps 100+): daily EOD
-Tier 3 (small caps): weekly Sunday
+AI Trading Engine v4.0
+KEY CHANGE: Always picks top 8 stocks every scan and sends
+to Claude for BUY/SELL/HOLD - no more "no signals" problem.
 """
 import schedule, time, logging, threading
 from datetime import datetime
@@ -44,35 +42,72 @@ class AITradingEngine:
         self.cfg       = cfg
 
     def _get_nifty_trend(self):
-        """Market filter — only go long if Nifty is not strongly bearish"""
-        try:
-            return self.news.fetch_nifty_trend()
-        except:
-            return "NEUTRAL"
+        try: return self.news.fetch_nifty_trend()
+        except: return "NEUTRAL"
 
-    def scan_tier(self, tier_name, symbols, notify_summary=True):
-        """Scan a list of symbols and return signals"""
-        log.info(f"=== SCANNING {tier_name} ({len(symbols)} stocks) ===")
+    def scan_tier(self, tier_name, symbols):
+        log.info(f"=== {tier_name} SCAN ({len(symbols)} stocks) ===")
+        ts          = datetime.now().strftime("%d %b %Y, %I:%M %p")
+        nifty       = self._get_nifty_trend()
+        user_syms   = [s["symbol"] for s in self.watchlist.get_all()]
+        all_syms    = list(set(symbols + user_syms))
 
-        # Market filter
-        nifty_trend = self._get_nifty_trend()
-        log.info(f"Nifty trend: {nifty_trend}")
-
-        # Also include user watchlist in every scan
-        user_watchlist = [s["symbol"] for s in self.watchlist.get_all()]
-        all_syms = list(set(symbols + user_watchlist))
-
-        signals = []
+        # Step 1: Score ALL stocks
+        scored = []
         for sym in all_syms:
             try:
-                result = self._analyze(sym, nifty_trend)
-                if result and result.get("action") != "HOLD":
-                    signals.append(result)
-                    self.tracker.log_signal(result)
+                df15 = self.fetcher.get_intraday(sym, "15m", "5d")
+                df1d = self.fetcher.get_daily(sym, "1y")
+                df1w = self.fetcher.get_weekly(sym, "3y")
+                if df1d is None: continue
+                ti = self.tech.analyze(df15, "intraday") if df15 is not None else {}
+                ts_sw = self.tech.analyze(df1d, "swing")
+                tl = self.tech.analyze(df1w, "longterm") if df1w is not None else {}
+                cd = self.candle.analyze(df1d)
+                sc = (ti.get("score",0)*0.25 +
+                      ts_sw.get("score",0)*0.45 +
+                      tl.get("score",0)*0.30)
+                scored.append({
+                    "symbol": sym, "score": sc,
+                    "ti": ti, "ts": ts_sw, "tl": tl, "cd": cd
+                })
+                log.info(f"{sym}: {sc:.1f}")
             except Exception as e:
-                log.error(f"{sym}: {e}")
+                log.error(f"Score {sym}: {e}")
 
-        # Check watchlist trend changes
+        if not scored:
+            self.notifier.send_message(f"Scan error - no data fetched. {ts}")
+            return []
+
+        # Step 2: Always pick TOP 6 bullish + TOP 2 bearish
+        scored.sort(key=lambda x: x["score"], reverse=True)
+        bullish = [s for s in scored if s["score"] > 0][:6]
+        bearish = [s for s in scored if s["score"] < 0][-2:]
+        candidates = bullish + bearish
+        if not candidates:
+            candidates = scored[:8]  # fallback: just take top 8
+
+        log.info(f"Sending {len(candidates)} stocks to AI analysis")
+
+        # Step 3: Send ALL candidates to Claude AI
+        results = []
+        for item in candidates:
+            try:
+                sym    = item["symbol"]
+                news   = self.news.fetch(sym)
+                fundam = self.fundam.get(sym)
+                result = self.ai.full_analysis(
+                    sym, item["ti"], item["ts"], item["tl"],
+                    item["cd"], fundam, news, item["score"], nifty)
+                if result:
+                    result["raw_score"] = round(item["score"], 1)
+                    results.append(result)
+                    if result.get("action") != "HOLD":
+                        self.tracker.log_signal(result)
+            except Exception as e:
+                log.error(f"AI {item['symbol']}: {e}")
+
+        # Step 4: Check watchlist trend changes
         for s in self.watchlist.get_all():
             try:
                 df  = self.fetcher.get_daily(s["symbol"], "3mo")
@@ -82,120 +117,44 @@ class AITradingEngine:
                     self.notifier.send_message(
                         f"WATCHLIST ALERT\n"
                         f"{s['symbol']} trend changed to {sig.get('trend')}")
-            except:
-                pass
+            except: pass
 
-        # Check portfolio
+        # Step 5: Portfolio check
         self.portfolio.check_portfolio(self.fetcher, self.ai)
 
-        ts = datetime.now().strftime("%d %b %Y, %I:%M %p")
-        if notify_summary:
-            if signals:
-                self.notifier.send_scan_summary(signals, ts, tier_name)
-            else:
-                self.notifier.send_message(
-                    f"Scan done ({tier_name}) - {ts}\n"
-                    f"Scanned {len(all_syms)} stocks\n"
-                    f"Nifty: {nifty_trend}\n"
-                    f"No strong signals.")
+        # Step 6: Always send full report - no hiding
+        ts_now = datetime.now().strftime("%d %b %Y, %I:%M %p")
+        self.notifier.send_full_report(results, ts_now, tier_name, nifty,
+                                        len(all_syms))
+        log.info(f"{tier_name} done. {len(results)} stocks analysed.")
+        return results
 
-        log.info(f"{tier_name} done. {len(signals)} signals from {len(all_syms)} stocks.")
-        return signals
-
-    def tier1_scan(self):
-        """Top 80 stocks — runs every 2.5 hours"""
-        self.scan_tier("TIER1 (Top Stocks)", self.cfg.TIER1)
-
-    def tier2_scan(self):
-        """Mid cap 100+ stocks — runs daily at 4 PM"""
-        self.scan_tier("TIER2 (Mid Caps)", self.cfg.TIER2)
-
-    def tier3_scan(self):
-        """Small caps — runs weekly Sunday 8 PM"""
-        self.scan_tier("TIER3 (Small Caps)", self.cfg.TIER3, notify_summary=True)
-
-    def full_market_scan(self):
-        """Full scan of all tiers — runs Sunday evening"""
-        log.info("=== FULL MARKET SCAN ALL TIERS ===")
-        all_signals = []
-        all_signals += self.scan_tier("TIER1", self.cfg.TIER1, notify_summary=False)
-        all_signals += self.scan_tier("TIER2", self.cfg.TIER2, notify_summary=False)
-        all_signals += self.scan_tier("TIER3", self.cfg.TIER3, notify_summary=False)
-
-        ts = datetime.now().strftime("%d %b %Y, %I:%M %p")
-        total = len(self.cfg.get_all_stocks())
-        self.notifier.send_message(
-            f"FULL MARKET SCAN COMPLETE\n"
-            f"{ts}\n"
-            f"Scanned {total}+ NSE stocks\n"
-            f"Total signals: {len(all_signals)}")
-
-        if all_signals:
-            self.notifier.send_scan_summary(all_signals, ts, "FULL MARKET")
-
-    def _analyze(self, symbol, nifty_trend="NEUTRAL"):
-        df15 = self.fetcher.get_intraday(symbol, "15m", "5d")
-        df1d = self.fetcher.get_daily(symbol, "1y")
-        df1w = self.fetcher.get_weekly(symbol, "3y")
-        if df1d is None:
-            return None
-
-        ti = self.tech.analyze(df15, "intraday") if df15 is not None else {}
-        ts = self.tech.analyze(df1d, "swing")
-        tl = self.tech.analyze(df1w, "longterm") if df1w is not None else {}
-        cd = self.candle.analyze(df1d)
-
-        sc = (ti.get("score",0)*0.25 +
-              ts.get("score",0)*0.45 +
-              tl.get("score",0)*0.30)
-
-        # Market filter: if Nifty strongly bearish, raise threshold for BUY signals
-        threshold = self.cfg.MIN_SCORE
-        if nifty_trend == "BEARISH":
-            threshold = self.cfg.MIN_SCORE + 1.5
-            log.info(f"Nifty bearish — raising threshold to {threshold}")
-
-        if abs(sc) < threshold:
-            return None
-
-        return self.ai.full_analysis(
-            symbol, ti, ts, tl, cd,
-            self.fundam.get(symbol),
-            self.news.fetch(symbol),
-            sc, nifty_trend
-        )
+    def tier1_scan(self): self.scan_tier("TIER1", self.cfg.TIER1)
+    def tier2_scan(self): self.scan_tier("TIER2", self.cfg.TIER2)
+    def tier3_scan(self): self.scan_tier("TIER3", self.cfg.TIER3)
 
     def start(self):
-        log.info("AI Trading Engine v3.1 starting...")
+        log.info("v4.0 starting...")
         self.notifier.send_message(
-            "AI TRADING BOT v3.1 ONLINE\n"
-            "Scanning 200+ NSE stocks\n"
-            "Tier 1 (80 top stocks): every 2.5h\n"
-            "Tier 2 (100 mid caps): daily 4 PM\n"
-            "Tier 3 (small caps): weekly Sunday\n"
-            "Morning briefing: 9:15 AM daily IST\n"
-            "Send /help for all commands")
+            "AI TRADING BOT v4.0 ONLINE\n"
+            "Every scan now gives TOP stock picks\n"
+            "No more no-signal messages!\n"
+            "Morning briefing: 9:15 AM IST\n"
+            "Tier 1 scan: every 2.5h\n"
+            "Tier 2 scan: 4 PM daily\n"
+            "News alerts: every 30 min\n"
+            "Send /help for commands")
 
-        # Start Telegram command bot in background thread
         bot = TelegramCommandBot(
             self.ai, self.portfolio,
             self.watchlist, self.notifier, self.morning)
         threading.Thread(target=bot.start_polling, daemon=True).start()
-        log.info("Telegram command bot started")
 
-        # 9:15 AM IST = 03:45 UTC
         schedule.every().day.at("09:15").do(self.morning.run)
-
-        # Tier 1: every 2.5 hours
         schedule.every(150).minutes.do(self.tier1_scan)
-
-        # Tier 2: daily EOD 4 PM IST = 10:30 UTC
         schedule.every().day.at("16:00").do(self.tier2_scan)
+        schedule.every().friday.at("16:30").do(self.tier3_scan)
 
-        # Tier 3 + Full scan: Sunday 8 PM IST = 14:30 UTC
-        schedule.every().friday.at("16:00").do(self.full_market_scan)
-
-        # Run Tier 1 immediately on startup
         self.tier1_scan()
 
         while True:
