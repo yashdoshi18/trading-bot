@@ -184,16 +184,16 @@ class AITradingEngine:
         log.info("Telegram command bot started")
 
         # 9:15 AM IST = 03:45 UTC
-        schedule.every().day.at("03:45").do(self.morning.run)
+        schedule.every().day.at("09:15").do(self.morning.run)
 
         # Tier 1: every 2.5 hours
         schedule.every(150).minutes.do(self.tier1_scan)
 
         # Tier 2: daily EOD 4 PM IST = 10:30 UTC
-        schedule.every().day.at("10:30").do(self.tier2_scan)
+        schedule.every().day.at("16:00").do(self.tier2_scan)
 
         # Tier 3 + Full scan: Sunday 8 PM IST = 14:30 UTC
-        schedule.every().sunday.at("14:30").do(self.full_market_scan)
+        schedule.every().sunday.at("20:00").do(self.full_market_scan)
 
         # Run Tier 1 immediately on startup
         self.tier1_scan()
