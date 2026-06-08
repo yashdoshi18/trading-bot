@@ -193,7 +193,7 @@ class AITradingEngine:
         schedule.every().day.at("16:00").do(self.tier2_scan)
 
         # Tier 3 + Full scan: Sunday 8 PM IST = 14:30 UTC
-        schedule.every().sunday.at("20:00").do(self.full_market_scan)
+        schedule.every().friday.at("16:00").do(self.full_market_scan)
 
         # Run Tier 1 immediately on startup
         self.tier1_scan()
