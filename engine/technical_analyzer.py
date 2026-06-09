@@ -152,3 +152,4 @@ class TechnicalAnalyzer:
         sig["resistance"] = round(float(h.rolling(20).max().iloc[-1]),2)
         sig["score"]      = round(score,1)
         return sig
+
