@@ -94,3 +94,4 @@ class Config:
     NIFTY_SYMBOL    = "^NSEI"
     SENSEX_SYMBOL   = "^BSESN"
     BANKNIFTY_SYMBOL= "^NSEBANK"
+
