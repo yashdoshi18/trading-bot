@@ -119,4 +119,3 @@ class PortfolioManager:
                 f"   SL: Rs.{sl} | T1: Rs.{t1}"
             )
         return "\n".join(lines)
-
