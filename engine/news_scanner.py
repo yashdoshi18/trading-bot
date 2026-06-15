@@ -460,3 +460,4 @@ class NewsScanner:
             ]
 
         return "\n".join(lines)
+
