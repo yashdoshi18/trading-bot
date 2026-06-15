@@ -243,3 +243,4 @@ class AIEngine:
         price = float(price)
         return self._fallback(symbol, price, max(sc, 3),
                               news_title, candle.get("bias","NEUTRAL"))
+                            
