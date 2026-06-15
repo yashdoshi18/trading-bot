@@ -106,4 +106,3 @@ class MorningAnalysis:
             f"Good trading today!")
 
         log.info(f"Morning done. {total} picks from {scanned} stocks.")
-    
