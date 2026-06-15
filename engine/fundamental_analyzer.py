@@ -15,7 +15,6 @@ class FundamentalAnalyzer:
                 "de":      round(info.get("debtToEquity",0) or 0, 2),
                 "eps_g":   f"{round((info.get('earningsGrowth') or 0)*100,1)}%",
                 "sector":  info.get("sector",""),
-                "mktcap":  info.get("marketCap",0),
                 "from_52h":f"{round((cur-wh)/wh*100,1)}%" if wh and cur else None,
                 "from_52l":f"{round((cur-wl)/wl*100,1)}%" if wl and cur else None,
                 "52h":     round(wh,2) if wh else None,
