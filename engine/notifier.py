@@ -180,4 +180,3 @@ class TelegramNotifier:
                 f"{extra}"
             )
         self.send_message(msg)
-    
