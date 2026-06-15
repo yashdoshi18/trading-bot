@@ -185,4 +185,3 @@ class NewsFetcher:
         except Exception as e:
             log.warning(f"Nifty trend: {e}")
             return "NEUTRAL"
-
