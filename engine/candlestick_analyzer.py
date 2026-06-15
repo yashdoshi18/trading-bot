@@ -243,3 +243,4 @@ class CandlestickAnalyzer:
             "interpretation": interpretation,
             "top_pattern": pattern_details[0] if pattern_details else None
         }
+
